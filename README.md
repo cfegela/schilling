@@ -2,7 +2,7 @@
 
 This repository contains the architecture design, migration strategy, and Infrastructure as Code (IaC) configurations for migrating a traditional Small/Medium-Sized Business (SMB) on-premises infrastructure to Amazon Web Services (AWS).
 
-The goal of this project is to modernize the client's current footprint comprised of a website server, an interconnected database, and an internal employee email server—while improving security, scalability, and operational efficiency.
+The goal of this project is to modernize the client's current systems comprised of a web server, a relational database, and an internal employee email server while improving security, scalability, and operational efficiency.
 
 ## Architecture Diagram
 
