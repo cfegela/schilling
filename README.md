@@ -1,4 +1,105 @@
-# Architectural Decision Records — SMB Cloud Migration
+# SMB Cloud Migration — Architecture & Infrastructure
+
+## Terraform Infrastructure
+
+The `terraform/` directory contains modularized Terraform (>= 1.5, AWS provider ~> 5.0, Random provider ~> 3.0) that provisions the full architecture described in this document.
+
+### Module Structure
+
+```
+terraform/
+  providers.tf          # AWS + Random provider configuration
+  variables.tf          # Root input variables
+  main.tf               # Module composition, secret version, rotation config, ECS IAM policy
+  outputs.tf            # CloudFront URL, ALB DNS, Aurora endpoints, ECR URL, Route 53 NS, ACM ARN, secret ARN
+  modules/
+    vpc/                # VPC, 3 public + 3 private subnets across 3 AZs, IGW, NAT Gateway, route tables
+    vpn/                # Virtual Private Gateway, Customer Gateway, Site-to-Site VPN, BGP route propagation
+    ecs/                # ALB, ECS Fargate cluster + service (nginx placeholder), IAM execution role, CloudWatch logs
+    aurora/             # Aurora Serverless v2 (PostgreSQL), DB subnet group, security group
+    frontend/           # S3 bucket (hello world placeholder), CloudFront OAC, distribution
+    ecr/                # ECR private repository, scan-on-push, 30-image lifecycle policy
+    route53/            # Public hosted zone for the apex domain
+    acm/                # ACM certificate (apex + wildcard SAN), Route 53 DNS validation records
+    secrets/            # Random DB password, Secrets Manager secret, PostgreSQL rotation Lambda (SAR)
+```
+
+### Security Group Connectivity
+
+| Hop | Source | Destination | Port | Mechanism |
+|---|---|---|---|---|
+| Internet → ALB | `0.0.0.0/0` | `alb-sg` | 80, 443 | CIDR ingress |
+| ALB → ECS tasks | `alb-sg` | `ecs-sg` | 80 (container port) | SG-to-SG reference |
+| ECS tasks → Aurora | `ecs-sg` | `aurora-sg` | 5432 | SG-to-SG reference |
+| Rotation Lambda → Aurora | `rotation-lambda-sg` | `aurora-sg` | 5432 | SG-to-SG reference |
+
+### Traffic Routing (CloudFront)
+
+| Path | Origin | Caching |
+|---|---|---|
+| `/*` (default) | S3 static frontend | 24h default TTL |
+| `/api/*` | ALB → ECS | Disabled (TTL = 0) |
+
+### Secrets Management
+
+Aurora credentials are generated automatically and stored in AWS Secrets Manager — no password is ever supplied as a Terraform input.
+
+| Secret | Path | Rotation |
+|---|---|---|
+| Aurora DB credentials | `<project>/db-credentials` | Every 30 days via AWS-managed PostgreSQL rotation Lambda (SAR) |
+
+The secret JSON contains `username`, `password`, `engine`, `host`, `port`, and `dbname`. The rotation Lambda runs inside the VPC (private subnets) and reaches Secrets Manager via the NAT Gateway.
+
+To inject DB credentials into ECS containers, reference the secret ARN from the `db_secret_arn` output in the task definition's `secrets` block:
+
+```json
+"secrets": [{ "name": "DB_CREDENTIALS", "valueFrom": "<db_secret_arn>" }]
+```
+
+The ECS task execution role is granted `secretsmanager:GetSecretValue` on the DB secret automatically.
+
+### Required Inputs
+
+| Variable | Description |
+|---|---|
+| `onprem_public_ip` | Public IP of the on-premise customer gateway device |
+| `domain_name` | Apex domain for Route 53 hosted zone and ACM certificate (e.g. `example.com`) |
+
+### Deploy
+
+```bash
+cd terraform
+terraform init
+terraform apply \
+  -var="onprem_public_ip=<YOUR_IP>" \
+  -var="domain_name=example.com"
+```
+
+After apply, copy the `route53_name_servers` output to your domain registrar's NS records. ACM validation completes automatically once DNS propagates (typically a few minutes).
+
+### Key Outputs
+
+| Output | Description |
+|---|---|
+| `cloudfront_domain_name` | Primary public entry point |
+| `ecr_repository_url` | ECR URI — use as the image base path in ECS task definitions |
+| `acm_certificate_arn` | Validated TLS certificate — attach to CloudFront or ALB HTTPS listeners |
+| `route53_name_servers` | NS records to set at your domain registrar |
+| `db_secret_arn` | Secrets Manager ARN for DB credentials — reference in ECS task `secrets` block |
+| `vpn_customer_gateway_configuration` | (sensitive) XML config for the on-premise customer gateway device |
+
+### Notable Defaults & Upgrade Paths
+
+- **NAT Gateway:** Single instance for cost efficiency. For full HA, provision one per AZ with per-AZ private route tables.
+- **VPN routing:** BGP (dynamic). Set `onprem_bgp_asn` and `static_routes_only = false`. For devices without BGP support, switch to `static_routes_only = true` and add `aws_vpn_connection_route` resources.
+- **ECS image:** `nginx:latest` placeholder. Replace `container_image` variable with the real application container. Push images to the `ecr_repository_url` output.
+- **CloudFront certificate:** Attach the `acm_certificate_arn` output to the CloudFront distribution and set `ssl_support_method = "sni-only"` to enable HTTPS on the custom domain.
+- **Aurora:** 2 instances (`db.serverless`) across AZs for Multi-AZ HA. Scales between 0.5–16 ACUs automatically.
+- **Secret rotation:** Credentials rotate every 30 days. Adjust `rotation_days` in the secrets module if a shorter cycle is required.
+
+---
+
+## Architectural Decision Records — SMB Cloud Migration
 
 ## Architecture Diagram
 
@@ -22,6 +123,10 @@ flowchart LR
     subgraph AWS["AWS Cloud"]
         direction TB
         VGW["Virtual Private\nGateway"]
+        R53["Route 53\n(DNS)"]
+        ACM["ACM\n(TLS Certificate)"]
+        SM["Secrets Manager\n(DB Credentials,\nAuto-Rotation)"]
+        ECR["ECR\n(Container Registry)"]
 
         subgraph VPC["VPC — Single Region, 3 Availability Zones"]
             direction TB
@@ -34,6 +139,7 @@ flowchart LR
             subgraph Private["Private Subnets (x3 AZs)"]
                 ECS["ECS\n(Containerized API)"]
                 Aurora["Aurora Serverless\n(RDS)"]
+                RotLambda["Rotation Lambda\n(Secrets Manager)"]
             end
         end
 
@@ -45,13 +151,26 @@ flowchart LR
         M365["Microsoft 365 /\nGoogle Workspace\n(Email, Identity, File Sharing)"]
     end
 
-    %% User traffic
-    Users --> CF
+    %% User traffic (DNS → CDN → origins)
+    Users --> R53
+    R53 --> CF
     CF --> S3
     CF --> ALB
     ALB --> ECS
     ECS --> Aurora
     IGW --> ALB
+
+    %% TLS
+    ACM -. "TLS cert" .-> CF
+    ACM -. "TLS cert" .-> ALB
+
+    %% Container registry
+    ECR --> ECS
+
+    %% Secrets management
+    ECS -. "fetch secret" .-> SM
+    RotLambda --> Aurora
+    RotLambda --> SM
 
     %% VPN connection
     CGW --> VPNTUNNEL --> VGW
