@@ -209,7 +209,7 @@ Use AWS Site-to-Site VPN to connect the on-premise environment to the AWS VPC.
 
 ---
 
-## ADR-002: Multi-AZ VPC with 3 Public and 3 Private Subnets
+### ADR-002: Multi-AZ VPC with 3 Public and 3 Private Subnets
 
 **Status:** Accepted
 
@@ -230,7 +230,7 @@ Deploy a single-region VPC spanning 3 Availability Zones, with one public and on
 
 ---
 
-## ADR-003: Webserver Migration to CloudFront/S3 (Frontend) and ECS (API)
+### ADR-003: Webserver Migration to CloudFront/S3 (Frontend) and ECS (API)
 
 **Status:** Accepted
 
@@ -253,7 +253,7 @@ Decompose the monolith into a static JavaScript frontend hosted on S3 and served
 
 ---
 
-## ADR-004: Database Migration to Amazon Aurora Serverless
+### ADR-004: Database Migration to Amazon Aurora Serverless
 
 **Status:** Accepted
 
@@ -275,7 +275,7 @@ Migrate the database to Amazon Aurora Serverless (PostgreSQL or MySQL-compatible
 
 ---
 
-## ADR-005: Database Migration via Batch ETL with Last-Mile Sync
+### ADR-005: Database Migration via Batch ETL with Last-Mile Sync
 
 **Status:** Accepted
 
@@ -298,7 +298,7 @@ Use periodic batch ETL scripts to incrementally load data into the cloud databas
 
 ---
 
-## ADR-006: Email Migration to Microsoft 365 or Google Workspace
+### ADR-006: Email Migration to Microsoft 365 or Google Workspace
 
 **Status:** Accepted
 
