@@ -99,8 +99,6 @@ After apply, copy the `route53_name_servers` output to your domain registrar's N
 
 ---
 
-## Architectural Decision Records — SMB Cloud Migration
-
 ## Architecture Diagram
 
 ```mermaid
@@ -189,7 +187,9 @@ flowchart LR
 
 ---
 
-## ADR-001: On-Premise to AWS Connectivity via Site-to-Site VPN
+## Architectural Decision Records
+
+### ADR-001: On-Premise to AWS Connectivity via Site-to-Site VPN
 
 **Status:** Accepted
 
